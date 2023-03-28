@@ -139,10 +139,8 @@ class Softmax(Layer):
 
 # %% Read data
 
-trainData = pd.read_csv(
-    r'C:\Users\Bruger\spyder-workspace\mnist_train.csv').to_numpy().T
-testData = pd.read_csv(
-    r'C:\Users\Bruger\spyder-workspace\mnist_test.csv').to_numpy().T
+trainData = pd.read_csv("data_folder\mnist_train.csv").to_numpy().T
+testData = pd.read_csv("data_folder\mnist_test.csv").to_numpy().T
 
 nTrain, mTrain = trainData.shape
 nTest, mTest = testData.shape
