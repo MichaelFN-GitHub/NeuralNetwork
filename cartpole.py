@@ -1,88 +1,107 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
 import gym
 import numpy as np
-import matplotlib.pyplot as plt
-import torch
-
-env = gym.make("CartPole-v1")
-
-num_inputs = 4
-num_actions = 2
-
-model = torch.nn.Sequential(
-    torch.nn.Linear(num_inputs, 128, bias=False, dtype=torch.float32),
-    torch.nn.ReLU(),
-    torch.nn.Linear(128, num_actions, bias=False, dtype=torch.float32),
-    torch.nn.Softmax(dim=1)
-)
 
 
-def run_episode(max_steps_per_episode=10000, render=False):
-    states, actions, probs, rewards = [], [], [], []
-    state, _ = env.reset()
-    # print("Initial state shape:", state)  # Check the initial shape of state
-    state = np.array(state)  # Ensure state is a NumPy array
-    for _ in range(max_steps_per_episode):
-        if render:
-            env.render()
-        state_expanded = np.expand_dims(state, 0)
-        tensor_state = torch.from_numpy(state_expanded).float()  # Convert to tensor and specify the data type
-        action_probs = model(tensor_state)[0]
-        action = np.random.choice(num_actions, p=np.squeeze(action_probs.detach().numpy()))
-        nstate, reward, done, info, _ = env.step(action)  # Correct: unpacking 4 values
-        if done:
-            break
-        states.append(state)
-        actions.append(action)
-        probs.append(action_probs.detach().numpy())
-        rewards.append(reward)
-        state = np.array(nstate)  # Ensure nstate is a NumPy array
-    return np.vstack(states), np.vstack(actions), np.vstack(probs), np.vstack(rewards)
+# Define a simple neural network with one hidden layer
+class PolicyNetwork(nn.Module):
+    def __init__(self):
+        super(PolicyNetwork, self).__init__()
+        self.fc1 = nn.Linear(4, 128)  # CartPole environment has 4 input features
+        self.fc2 = nn.Linear(128, 2)  # CartPole actions: left or right
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.softmax(self.fc2(x), dim=0)
+        return x
 
 
-s, a, p, r = run_episode()
-print(f"Total reward: {np.sum(r)}")
+# Initialize environment, network, and optimizer
+env = gym.make('CartPole-v1')
+policy_net = PolicyNetwork()
+optimizer = optim.Adam(policy_net.parameters(), lr=0.01)
 
-eps = 0.0001
 
-def discounted_rewards(rewards,gamma=0.99,normalize=True):
-    ret = []
-    s = 0
-    for r in rewards[::-1]:
-        s = r + gamma * s
-        ret.insert(0, s)
-    if normalize:
-        ret = (ret-np.mean(ret))/(np.std(ret)+eps)
-    return ret
+def select_action(state):
+    state = torch.from_numpy(state).float()
+    probs = policy_net(state)
+    # We will use probabilities to select actions
+    action = torch.multinomial(probs, 1).item()
+    return action
 
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
-def train_on_batch(x, y):
-    x = torch.from_numpy(x)
-    y = torch.from_numpy(y)
-    optimizer.zero_grad()
-    predictions = model(x)
-    loss = -torch.mean(torch.log(predictions) * y)
-    loss.backward()
-    optimizer.step()
-    return loss
+def train(episodes):
+    for episode in range(1, episodes+1):
+        state = env.reset()
+        log_probs = []
+        rewards = []
+        done = False
 
-alpha = 1e-4
+        # Collect samples for this episode
+        while not done:
+            action = select_action(state)
+            state, reward, done, _ = env.step(action)
+            log_prob = torch.log(policy_net(torch.from_numpy(state).float())[action])
+            log_probs.append(log_prob)
+            rewards.append(reward)
 
-history = []
-for epoch in range(300):
-    states, actions, probs, rewards = run_episode()
-    one_hot_actions = np.eye(2)[actions.T][0]
-    gradients = one_hot_actions-probs
-    dr = discounted_rewards(rewards)
-    gradients *= dr
-    target = alpha*np.vstack([gradients])+probs
-    train_on_batch(states,target)
-    history.append(np.sum(rewards))
-    if epoch%100==0:
-        print(f"{epoch} -> {np.sum(rewards)}")
+        # Update policy after the episode is done
+        discounted_rewards = []
+        for t in range(len(rewards)):
+            Gt = 0
+            pw = 0
+            for r in rewards[t:]:
+                Gt = Gt + (0.99 ** pw) * r
+                pw = pw + 1
+            discounted_rewards.append(Gt)
 
-plt.plot(history)
+        discounted_rewards = torch.tensor(discounted_rewards)
+        discounted_rewards = (discounted_rewards - discounted_rewards.mean()) / (
+                    discounted_rewards.std() + 1e-9)  # normalize discounted rewards
 
-_ = run_episode(render=True)
+        policy_gradient = []
+        for log_prob, Gt in zip(log_probs, discounted_rewards):
+            policy_gradient.append(-log_prob * Gt)
+
+        # Perform backprop
+        optimizer.zero_grad()
+        policy_gradient = torch.stack(policy_gradient).sum()
+        policy_gradient.backward()
+        optimizer.step()
+
+        # Print results
+        if episode % 50 == 0:
+            print(f"Episode {episode}, Total Reward: {sum(rewards)}")
+
+
+# Train the agent
+train(500)
+
+# Close the environment
+env.close()
+
+
+# if __name__ == "__main__":
+#
+#     if False:
+#         env = gym.make('CartPole-v0', render_mode='rgb_array')
+#
+#         episodes = 5
+#         for episode in range(1, episodes+1):
+#             env.reset()
+#             done = False
+#             score = 0
+#
+#             while not done:
+#                 action = env.action_space.sample()
+#                 obs, reward, done, truncated, info = env.step(action)
+#                 score += reward
+#
+#             print(f"Episode:{episode} Score:{score}")
+#         env.close()
+#
 
 
